@@ -1,8 +1,10 @@
 import io
 import re
+from collections import Counter
 from typing import Generator
 
 import anthropic
+from apify_client import ApifyClient
 from docx import Document
 from docx.shared import Pt
 
@@ -242,6 +244,142 @@ def build_competitor_prompt(data: dict, plan_days: int, lang: str = "Русск�
 ## Хэштеги с низкой конкуренцией
 
 15–20 хэштегов, где меньше борьбы за внимание"""
+
+
+def scrape_instagram_profile(apify_token: str, username: str) -> dict | None:
+    client = ApifyClient(apify_token)
+    username = username.lstrip("@").strip()
+
+    run = client.actor("apify/instagram-profile-scraper").call(
+        run_input={"usernames": [username], "resultsLimit": 12},
+    )
+    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    if not items:
+        return None
+
+    p = items[0]
+    posts = p.get("latestPosts") or []
+
+    likes = [post.get("likesCount") or 0 for post in posts]
+    comments = [post.get("commentsCount") or 0 for post in posts]
+    avg_likes = round(sum(likes) / len(likes)) if likes else 0
+    avg_comments = round(sum(comments) / len(comments)) if comments else 0
+    followers = p.get("followersCount") or 1
+    engagement_rate = round((avg_likes + avg_comments) / followers * 100, 2)
+
+    all_tags: list[str] = []
+    post_summaries: list[dict] = []
+    for post in posts[:8]:
+        caption = post.get("caption") or ""
+        tags = re.findall(r"#\w+", caption)
+        all_tags.extend(tags)
+        post_summaries.append({
+            "type": post.get("type", "Image"),
+            "likes": post.get("likesCount") or 0,
+            "comments": post.get("commentsCount") or 0,
+            "caption_preview": caption[:150],
+        })
+
+    top_tags = [tag for tag, _ in Counter(all_tags).most_common(20)]
+
+    return {
+        "username": p.get("username", username),
+        "full_name": p.get("fullName") or "",
+        "bio": p.get("biography") or "",
+        "followers": p.get("followersCount") or 0,
+        "following": p.get("followsCount") or 0,
+        "posts_count": p.get("postsCount") or 0,
+        "is_verified": p.get("isVerified") or False,
+        "category": p.get("businessCategoryName") or "",
+        "avg_likes": avg_likes,
+        "avg_comments": avg_comments,
+        "engagement_rate": engagement_rate,
+        "top_hashtags": top_tags,
+        "recent_posts": post_summaries,
+    }
+
+
+def build_scraped_prompt(data: dict, plan_days: int, lang: str = "Русский") -> str:
+    posts_text = "\n".join(
+        f"  - {p['type']} | ❤️{p['likes']:,} 💬{p['comments']:,} | {p['caption_preview'][:120]}"
+        for p in data["recent_posts"]
+    )
+    hashtags_str = ", ".join(data["top_hashtags"][:15]) or "не определены"
+
+    return f"""{_lang_line(lang)}
+
+Ты получил реальные данные Instagram-профиля. Проведи глубокий анализ и составь контент-план.
+
+## Реальные данные @{data['username']}
+
+- **Имя:** {data['full_name']}
+- **Bio:** {data['bio']}
+- **Категория:** {data['category'] or 'не указана'}
+- **Подписчики:** {data['followers']:,}
+- **Подписки:** {data['following']:,}
+- **Всего постов:** {data['posts_count']:,}
+- **Верифицирован:** {'✅ Да' if data['is_verified'] else 'Нет'}
+
+## Метрики вовлечённости
+
+- **Среднее лайков на пост:** {data['avg_likes']:,}
+- **Среднее комментариев:** {data['avg_comments']:,}
+- **Engagement Rate:** {data['engagement_rate']}%
+- **Используемые хэштеги:** {hashtags_str}
+
+## Последние посты
+
+{posts_text}
+
+---
+
+На основе РЕАЛЬНЫХ данных выдай:
+
+## Анализ профиля
+
+**Сильные стороны** — на основе метрик и контента
+
+**Слабые стороны / точки роста** — что тормозит рост
+
+**Целевая аудитория** — определи по Bio, контенту и нише
+
+**Tone of Voice** — проанализируй по подписям постов
+
+**Оценка {data['engagement_rate']}% ER** — хорошо или плохо для этой ниши, сравни с benchmarks
+
+---
+
+## Контент-план на {plan_days} дней
+
+| День | Формат | Тема | Хук | CTA |
+|------|--------|------|-----|-----|
+
+Заполни все {plan_days} строк.
+
+---
+
+## Советы по росту
+
+**Хэштеги** — улучши существующие, добавь новые группы (15–20 штук)
+
+**Время публикаций** — рекомендации на основе ниши
+
+**Форматы** — что добавить, исходя из текущего контента
+
+**Быстрые wins** — 3 конкретных действия на ближайшую неделю
+
+---
+
+## Идеи для постов и рилсов
+
+5 идей, основанных на лучших постах и пробелах в контенте:
+
+**Идея N — [Название]**
+- Формат:
+- Тема:
+- Хук:
+- Почему сработает (на основе данных профиля):
+- CTA:"""
 
 
 def stream_analysis(

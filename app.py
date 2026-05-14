@@ -11,7 +11,9 @@ from analyzer import (
     build_competitor_prompt,
     build_niche_prompt,
     build_profile_prompt,
+    build_scraped_prompt,
     markdown_to_docx,
+    scrape_instagram_profile,
     stream_analysis,
     stream_chat,
 )
@@ -21,11 +23,12 @@ load_dotenv()
 st.set_page_config(page_title="Instagram AI Анализатор", page_icon="📸", layout="wide")
 
 # ── Session state defaults ────────────────────────────────────────────────────
-for k in ("profile", "niche", "caption", "bio", "competitor"):
+for k in ("profile", "niche", "caption", "bio", "competitor", "scrape"):
     st.session_state.setdefault(f"result_{k}", None)
     st.session_state.setdefault(f"usage_{k}", {})
     st.session_state.setdefault(f"chat_{k}", [])
 st.session_state.setdefault("history", [])
+st.session_state.setdefault("scraped_data_scrape", None)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 GOALS = ["Рост подписчиков", "Продажи / монетизация", "Охваты и узнаваемость", "Личный бренд"]
@@ -50,6 +53,17 @@ with st.sidebar:
             help="Ключ из console.anthropic.com",
         )
 
+    env_apify = os.getenv("APIFY_TOKEN", "")
+    if env_apify:
+        st.success("Apify Token загружен")
+        apify_token = env_apify
+    else:
+        apify_token = st.text_input(
+            "Apify Token",
+            type="password",
+            help="Токен из apify.com/account → Integrations",
+        )
+
     plan_days = st.select_slider(
         "Период контент-плана",
         options=[7, 14, 30],
@@ -72,6 +86,72 @@ with st.sidebar:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _show_profile_card(data: dict) -> None:
+    verified = " ✅" if data["is_verified"] else ""
+    st.markdown(f"### @{data['username']}{verified}")
+    if data["full_name"]:
+        st.caption(data["full_name"])
+    if data["bio"]:
+        st.info(data["bio"])
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Подписчики", f"{data['followers']:,}")
+    col2.metric("Постов", f"{data['posts_count']:,}")
+    col3.metric("Engagement Rate", f"{data['engagement_rate']}%")
+    col4.metric("Avg ❤️", f"{data['avg_likes']:,}")
+    if data["top_hashtags"]:
+        st.caption("Топ хэштеги: " + "  ".join(data["top_hashtags"][:10]))
+
+
+def _run_scrape_pending() -> bool:
+    pending = st.session_state.pop("pending_scrape", None)
+    if not pending:
+        return False
+    if not api_key:
+        st.error("Введи Anthropic API Key.")
+        return False
+    if not apify_token:
+        st.error("Введи Apify Token в боковой панели.")
+        return False
+
+    with st.spinner("📡 Получаю данные профиля из Instagram... (30–60 сек)"):
+        try:
+            profile_data = scrape_instagram_profile(apify_token, pending["username"])
+        except Exception as e:
+            st.error(f"Ошибка парсинга: {e}")
+            return False
+
+    if not profile_data:
+        st.error("Профиль не найден или недоступен.")
+        return False
+
+    st.session_state["scraped_data_scrape"] = profile_data
+    _show_profile_card(profile_data)
+    st.divider()
+
+    prompt = build_scraped_prompt(profile_data, pending["plan_days"], pending["lang"])
+    usage: dict = {}
+    try:
+        result = st.write_stream(stream_analysis(api_key, prompt, usage_container=usage))
+    except Exception as e:
+        st.error(f"Ошибка API: {e}")
+        return False
+
+    st.session_state["result_scrape"] = result
+    st.session_state["usage_scrape"] = usage
+    st.session_state["chat_scrape"] = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": result},
+    ]
+    st.session_state.history.append({
+        "title": f"Парсинг: @{profile_data['username']}",
+        "content": result,
+        "tokens_in": usage.get("input_tokens", 0),
+        "tokens_out": usage.get("output_tokens", 0),
+        "time": datetime.datetime.now().strftime("%d.%m %H:%M"),
+    })
+    return True
+
 
 def _run_pending(tab_key: str) -> bool:
     """Consume pending generation request; return True if ran."""
@@ -203,12 +283,13 @@ def _result_section(tab_key: str, just_generated: bool) -> None:
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_profile, tab_niche, tab_caption, tab_bio, tab_competitor = st.tabs([
+tab_profile, tab_niche, tab_caption, tab_bio, tab_competitor, tab_scrape = st.tabs([
     "📊 Анализ профиля",
     "🚀 По нише",
     "✍️ Генератор подписей",
     "💼 Оптимизатор Bio",
     "🔍 Анализ конкурентов",
+    "📡 Парсинг Instagram",
 ])
 
 # ── Tab 1: Profile ────────────────────────────────────────────────────────────
@@ -359,3 +440,40 @@ with tab_competitor:
     st.divider()
     gen = _run_pending("competitor")
     _result_section("competitor", gen)
+
+# ── Tab 6: Instagram Scraping (Apify) ────────────────────────────────────────
+with tab_scrape:
+    st.subheader("Парсинг Instagram профиля")
+    st.caption(
+        "Получает реальные данные аккаунта (подписчики, посты, вовлечённость) "
+        "через Apify и анализирует их с помощью Claude. "
+        "Требует Apify Token — бесплатный план даёт $5/мес."
+    )
+
+    sc_username = st.text_input(
+        "Instagram username *",
+        placeholder="@natgeo  или  natgeo",
+        key="sc_username",
+    )
+
+    if st.button("Спарсить и проанализировать", type="primary", key="btn_scrape"):
+        if not sc_username.strip():
+            st.warning("Введи username.")
+        elif not apify_token:
+            st.warning("Введи Apify Token в боковой панели.")
+        else:
+            st.session_state["pending_scrape"] = {
+                "username": sc_username,
+                "plan_days": plan_days,
+                "lang": lang,
+            }
+
+    st.divider()
+
+    gen = _run_scrape_pending()
+
+    if not gen:
+        if scraped := st.session_state.get("scraped_data_scrape"):
+            _show_profile_card(scraped)
+            st.divider()
+        _result_section("scrape", False)

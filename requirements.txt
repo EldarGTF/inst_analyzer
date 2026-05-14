@@ -2,3 +2,4 @@ streamlit>=1.35
 anthropic>=0.30
 python-dotenv>=1.0
 python-docx>=1.1
+apify-client>=1.7
