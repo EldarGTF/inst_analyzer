@@ -18,12 +18,16 @@ st.caption("Контент-план, анализ профиля и советы
 with st.sidebar:
     st.header("Настройки")
 
-    api_key = st.text_input(
-        "Anthropic API Key",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
-        type="password",
-        help="Ключ из console.anthropic.com. Можно задать в файле .env",
-    )
+    env_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if env_key:
+        st.success("API Key загружен из окружения")
+        api_key = env_key
+    else:
+        api_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            help="Ключ из console.anthropic.com. Можно задать в файле .env",
+        )
 
     plan_days = st.select_slider(
         "Период контент-плана",
