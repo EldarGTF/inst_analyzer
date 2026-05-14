@@ -1,8 +1,31 @@
 import datetime
+import json
 import os
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
+
+HISTORY_FILE = Path("history.json")
+
+
+def _load_history() -> list:
+    if HISTORY_FILE.exists():
+        try:
+            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+
+def _save_history(history: list) -> None:
+    try:
+        HISTORY_FILE.write_text(
+            json.dumps(history, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 from analyzer import (
     LANGUAGES,
@@ -27,7 +50,8 @@ for k in ("profile", "niche", "caption", "bio", "competitor", "scrape"):
     st.session_state.setdefault(f"result_{k}", None)
     st.session_state.setdefault(f"usage_{k}", {})
     st.session_state.setdefault(f"chat_{k}", [])
-st.session_state.setdefault("history", [])
+if "history" not in st.session_state:
+    st.session_state["history"] = _load_history()
 st.session_state.setdefault("scraped_data_scrape", None)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -153,6 +177,7 @@ def _run_scrape_pending() -> bool:
         "tokens_out": usage.get("output_tokens", 0),
         "time": datetime.datetime.now().strftime("%d.%m %H:%M"),
     })
+    _save_history(st.session_state.history)
     return True
 
 
@@ -185,6 +210,7 @@ def _run_pending(tab_key: str) -> bool:
         "tokens_out": usage.get("output_tokens", 0),
         "time": datetime.datetime.now().strftime("%d.%m %H:%M"),
     })
+    _save_history(st.session_state.history)
     return True
 
 
