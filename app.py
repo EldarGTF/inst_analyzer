@@ -76,10 +76,13 @@ with st.sidebar:
     if st.session_state.history:
         st.divider()
         st.subheader(f"История ({len(st.session_state.history)})")
-        for item in reversed(st.session_state.history[-8:]):
-            with st.expander(item["title"], expanded=False):
-                st.caption(f"{item['time']}  ·  ↑{item['tokens_in']} ↓{item['tokens_out']} токенов")
-                st.markdown(item["content"])
+        for idx, item in enumerate(reversed(st.session_state.history[-8:])):
+            col_title, col_btn = st.columns([3, 1])
+            with col_title:
+                st.caption(f"**{item['title']}**\n\n{item['time']} · ↑{item['tokens_in']} ↓{item['tokens_out']}")
+            with col_btn:
+                if st.button("Открыть", key=f"hist_open_{idx}"):
+                    st.session_state["viewed_history"] = item
 
     st.divider()
     st.caption("Powered by claude-sonnet-4-6")
@@ -281,6 +284,39 @@ def _result_section(tab_key: str, just_generated: bool) -> None:
     _show_exports(tab_key)
     _show_chat(tab_key)
 
+
+# ── History viewer ────────────────────────────────────────────────────────────
+if viewed := st.session_state.get("viewed_history"):
+    col_h, col_close = st.columns([6, 1])
+    with col_h:
+        st.subheader(f"📂 {viewed['title']}")
+        st.caption(f"{viewed['time']}  ·  ↑{viewed['tokens_in']} ↓{viewed['tokens_out']} токенов")
+    with col_close:
+        if st.button("✕ Закрыть", key="close_history"):
+            del st.session_state["viewed_history"]
+            st.rerun()
+
+    st.markdown(viewed["content"])
+
+    col_txt, col_docx, col_raw = st.columns(3)
+    with col_txt:
+        st.download_button(
+            "⬇ .txt", viewed["content"], "history.txt", "text/plain",
+            key="hist_dl_txt",
+        )
+    with col_docx:
+        try:
+            st.download_button(
+                "⬇ .docx", markdown_to_docx(viewed["content"]), "history.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="hist_dl_docx",
+            )
+        except Exception:
+            pass
+    with col_raw:
+        with st.expander("📋 Копировать"):
+            st.code(viewed["content"], language=None)
+    st.divider()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_profile, tab_niche, tab_caption, tab_bio, tab_competitor, tab_scrape = st.tabs([
