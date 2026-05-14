@@ -476,4 +476,4 @@ with tab_scrape:
         if scraped := st.session_state.get("scraped_data_scrape"):
             _show_profile_card(scraped)
             st.divider()
-        _result_section("scrape", False)
+    _result_section("scrape", gen)
