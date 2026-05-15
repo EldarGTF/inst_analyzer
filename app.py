@@ -1,31 +1,35 @@
 import datetime
 import json
 import os
-from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit_javascript import st_javascript
 
-HISTORY_FILE = Path("history.json")
+_LS_KEY = "ig_analyzer_history_v1"
 
 
-def _load_history() -> list:
-    if HISTORY_FILE.exists():
+def _ls_save(history: list) -> None:
+    """Записывает историю в localStorage браузера."""
+    payload = json.dumps(json.dumps(history, ensure_ascii=False))
+    st_javascript(f"localStorage.setItem('{_LS_KEY}', {payload}); 1;")
+
+
+def _ls_load() -> list | None:
+    """
+    Читает историю из localStorage.
+    Возвращает список если данные загружены,
+    None если компонент ещё не инициализировался (первый рендер).
+    """
+    raw = st_javascript(f"localStorage.getItem('{_LS_KEY}') ?? '__empty__'")
+    if raw == "__empty__":
+        return []
+    if isinstance(raw, str):
         try:
-            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            return json.loads(raw)
         except Exception:
             return []
-    return []
-
-
-def _save_history(history: list) -> None:
-    try:
-        HISTORY_FILE.write_text(
-            json.dumps(history, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+    return None  # int 0 = компонент ещё не готов
 
 from analyzer import (
     LANGUAGES,
@@ -50,8 +54,13 @@ for k in ("profile", "niche", "caption", "bio", "competitor", "scrape"):
     st.session_state.setdefault(f"result_{k}", None)
     st.session_state.setdefault(f"usage_{k}", {})
     st.session_state.setdefault(f"chat_{k}", [])
-if "history" not in st.session_state:
-    st.session_state["history"] = _load_history()
+if "history_initialized" not in st.session_state:
+    ls_data = _ls_load()
+    if ls_data is not None:          # localStorage ответил
+        st.session_state["history"] = ls_data
+        st.session_state["history_initialized"] = True
+    # ls_data is None → первый рендер, компонент ещё грузится → ждём следующий рендер
+st.session_state.setdefault("history", [])
 st.session_state.setdefault("scraped_data_scrape", None)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -177,7 +186,7 @@ def _run_scrape_pending() -> bool:
         "tokens_out": usage.get("output_tokens", 0),
         "time": datetime.datetime.now().strftime("%d.%m %H:%M"),
     })
-    _save_history(st.session_state.history)
+    _ls_save(st.session_state.history)
     return True
 
 
@@ -210,7 +219,7 @@ def _run_pending(tab_key: str) -> bool:
         "tokens_out": usage.get("output_tokens", 0),
         "time": datetime.datetime.now().strftime("%d.%m %H:%M"),
     })
-    _save_history(st.session_state.history)
+    _ls_save(st.session_state.history)
     return True
 
 

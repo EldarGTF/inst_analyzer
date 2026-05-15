@@ -3,3 +3,4 @@ anthropic>=0.30
 python-dotenv>=1.0
 python-docx>=1.1
 apify-client>=1.7
+streamlit-javascript>=0.1.5
